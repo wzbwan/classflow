@@ -1,0 +1,107 @@
+// Prisma schema for MVP
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           Int       @id @default(autoincrement())
+  name         String
+  email        String?   @unique
+  studentId    String?   @unique
+  role         Role     @default(STUDENT)
+  passwordHash String
+  createdAt    DateTime  @default(now())
+  enrollments  Enrollment[]
+  grades       Grade[]   @relation("UserGrades")
+  submissions  Submission[] @relation("UserSubmissions")
+  ownedCourses  Course[]   @relation("CourseOwner")
+}
+
+
+model Course {
+  id        Int         @id @default(autoincrement())
+  name      String
+  term      String
+  code      String
+  ownerId   Int
+  owner     User        @relation(name: "CourseOwner", fields: [ownerId], references: [id])
+  createdAt DateTime    @default(now())
+  assignments Assignment[]
+  enrollments Enrollment[]
+}
+
+model Enrollment {
+  id        Int     @id @default(autoincrement())
+  courseId  Int
+  userId    Int
+  roleInCourse RoleInCourse @default(STUDENT)
+  course    Course  @relation(fields: [courseId], references: [id])
+  user      User    @relation(fields: [userId], references: [id])
+
+  @@unique([courseId, userId])
+}
+
+
+model Assignment {
+  id           Int       @id @default(autoincrement())
+  courseId     Int
+  title        String
+  description  String
+  dueAt        DateTime
+  allowLate    Boolean   @default(true)
+  latePolicy   Json?     // JSON field (SQLite supported in Prisma v6+)
+  maxPoints    Int       @default(100)
+  rubricJson   Json?     // JSON field
+  materialsJson Json?    // Stored teaching material metadata
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  course       Course    @relation(fields: [courseId], references: [id])
+  submissions  Submission[]
+}
+
+model Submission {
+  id            Int       @id @default(autoincrement())
+  assignmentId  Int
+  studentId     Int
+  submittedAt   DateTime  @default(now())
+  status        String    @default("submitted")
+  filesJson     Json?     // JSON list of saved files
+  externalLink  String?
+  version       Int       @default(1)
+  assignment    Assignment @relation(fields: [assignmentId], references: [id])
+  student       User       @relation("UserSubmissions", fields: [studentId], references: [id])
+  grade         Grade?
+
+  @@index([assignmentId, studentId, version])
+}
+
+model Grade {
+  id          Int       @id @default(autoincrement())
+  submissionId Int      @unique
+  graderId    Int
+  score       Int
+  rubricScoresJson Json?
+  feedbackText String?
+  gradedAt    DateTime  @default(now())
+  submission  Submission @relation(fields: [submissionId], references: [id])
+  grader      User       @relation("UserGrades", fields: [graderId], references: [id])
+}
+
+enum Role {
+  ADMIN
+  TEACHER
+  TA
+  STUDENT
+}
+
+enum RoleInCourse {
+  OWNER
+  TEACHER
+  TA
+  STUDENT
+}
