@@ -1,8 +1,32 @@
 import { createReadStream, createWriteStream } from "fs";
+import { unlink } from "fs/promises";
 import { basename, join, resolve } from "path";
 
 function sanitizeFilename(name) {
-  return name.replace(/[^a-zA-Z0-9._-]/g, "_");
+  if (!name) return "file";
+  return name
+    .normalize("NFKC")
+    .replace(/[\\/:*?"<>|]/g, "-")
+    .replace(/\s+/g, "_")
+    .slice(0, 255) || "file";
+}
+
+const safeJsonArray = (val) => {
+  if (!val) return [];
+  if (Array.isArray(val)) return val;
+  if (typeof val === "string") {
+    try { return JSON.parse(val); } catch (_) { return []; }
+  }
+  return [];
+};
+
+async function removeFileSilently(path) {
+  if (!path) return;
+  try {
+    await unlink(path);
+  } catch (err) {
+    // ignore missing files
+  }
 }
 
 export default async function assignmentRoutes(fastify) {
@@ -107,5 +131,70 @@ export default async function assignmentRoutes(fastify) {
     if (!filePath.startsWith(root)) return reply.code(403).send({ error: "非法路径" });
     reply.header("Content-Disposition", `attachment; filename="${basename(m.filename)}"`);
     return reply.send(createReadStream(filePath));
+  });
+
+  fastify.delete("/assignments/:id/materials/:idx", { preHandler: [fastify.auth] }, async (req, reply) => {
+    const assignmentId = Number(req.params.id);
+    const idx = Number(req.params.idx);
+    const assignment = await fastify.prisma.assignment.findUnique({ where: { id: assignmentId } });
+    if (!assignment) return reply.code(404).send({ error: "作业不存在" });
+    const staff = await fastify.prisma.enrollment.findFirst({ where: { courseId: assignment.courseId, userId: req.user.uid, roleInCourse: { in: ["TEACHER", "TA", "OWNER"] } } });
+    if (!staff && req.user.role !== "ADMIN") return reply.code(403).send({ error: "无权限" });
+    const materials = Array.isArray(assignment.materialsJson) ? [...assignment.materialsJson] : [];
+    const removed = materials.splice(idx, 1)[0];
+    if (!removed) return reply.code(404).send({ error: "文件不存在" });
+    await removeFileSilently(removed.path);
+    await fastify.prisma.assignment.update({ where: { id: assignmentId }, data: { materialsJson: materials } });
+    return { materials: materials.map((m, i) => ({ idx: i, filename: m.filename, size: m.size, uploadedAt: m.uploadedAt })) };
+  });
+
+  fastify.put("/assignments/:id", { preHandler: [fastify.auth] }, async (req, reply) => {
+    const assignmentId = Number(req.params.id);
+    const assignment = await fastify.prisma.assignment.findUnique({ where: { id: assignmentId } });
+    if (!assignment) return reply.code(404).send({ error: "作业不存在" });
+    const staff = await fastify.prisma.enrollment.findFirst({ where: { courseId: assignment.courseId, userId: req.user.uid, roleInCourse: { in: ["TEACHER", "TA", "OWNER"] } } });
+    if (!staff && req.user.role !== "ADMIN") return reply.code(403).send({ error: "无权限" });
+
+    const { title, description, dueAt, allowLate, maxPoints } = req.body || {};
+    const data = {};
+    if (title !== undefined) data.title = String(title);
+    if (description !== undefined) data.description = String(description);
+    if (dueAt !== undefined) data.dueAt = new Date(dueAt);
+    if (allowLate !== undefined) data.allowLate = Boolean(allowLate);
+    if (maxPoints !== undefined) data.maxPoints = Number(maxPoints);
+    if (Object.keys(data).length === 0) return reply.code(400).send({ error: "无更新内容" });
+
+    const updated = await fastify.prisma.assignment.update({ where: { id: assignmentId }, data });
+    return {
+      ...updated,
+      materials: Array.isArray(updated.materialsJson) ? updated.materialsJson.map((m, idx) => ({ idx, filename: m.filename, size: m.size, uploadedAt: m.uploadedAt })) : [],
+    };
+  });
+
+  fastify.delete("/assignments/:id", { preHandler: [fastify.auth] }, async (req, reply) => {
+    const assignmentId = Number(req.params.id);
+    const assignment = await fastify.prisma.assignment.findUnique({ where: { id: assignmentId } });
+    if (!assignment) return reply.code(404).send({ error: "作业不存在" });
+    const staff = await fastify.prisma.enrollment.findFirst({ where: { courseId: assignment.courseId, userId: req.user.uid, roleInCourse: { in: ["TEACHER", "TA", "OWNER"] } } });
+    if (!staff && req.user.role !== "ADMIN") return reply.code(403).send({ error: "无权限" });
+
+    const submissions = await fastify.prisma.submission.findMany({ where: { assignmentId }, select: { filesJson: true } });
+    for (const sub of submissions) {
+      const files = safeJsonArray(sub.filesJson);
+      for (const file of files) {
+        await removeFileSilently(file.path);
+      }
+    }
+
+    const materials = Array.isArray(assignment.materialsJson) ? assignment.materialsJson : [];
+    for (const mat of materials) {
+      await removeFileSilently(mat.path);
+    }
+
+    await fastify.prisma.grade.deleteMany({ where: { submission: { assignmentId } } });
+    await fastify.prisma.submission.deleteMany({ where: { assignmentId } });
+    await fastify.prisma.assignment.delete({ where: { id: assignmentId } });
+
+    return { success: true };
   });
 }

@@ -105,12 +105,18 @@ select:focus-visible {
   color: var(--text);
   border: 1px solid rgba(15,23,42,0.2);
 }
+.btn-danger {
+  background: rgba(239,68,68,0.12);
+  color: #b91c1c;
+  border: 1px solid rgba(239,68,68,0.4);
+}
 .btn-link {
   background: transparent;
   color: var(--primary);
   padding: 0;
   border-radius: 0;
 }
+.btn-link.danger { color: #dc2626; }
 .btn-link:hover { text-decoration: underline; }
 .icon-button {
   border-radius: 50%;
@@ -205,6 +211,7 @@ select:focus-visible {
   border-bottom: 1px solid rgba(15,23,42,0.08);
 }
 .material-list li:last-child { border-bottom: none; }
+.material-actions { display: flex; gap: 8px; align-items: center; }
 
 .tag {
   display: inline-flex;

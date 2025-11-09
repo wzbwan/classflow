@@ -9,6 +9,7 @@ export default function App() {
   const [assignment, setAssignment] = useState(null)
   const [profileOpen, setProfileOpen] = useState(false)
   const [adminOpen, setAdminOpen] = useState(false)
+  const [courseVersion, setCourseVersion] = useState(0)
 
   useEffect(() => {
     api.me().then((res) => {
@@ -71,6 +72,8 @@ export default function App() {
           <Course
             user={user}
             course={course}
+            refreshKey={courseVersion}
+            onAssignmentsChange={() => setCourseVersion((v) => v + 1)}
             onOpenAssignment={(a) => {
               setAssignment(a)
               setPage('assignment')
@@ -78,7 +81,17 @@ export default function App() {
           />
         )}
         {page === 'assignment' && assignment && (
-          <Assignment assignment={assignment} course={course} user={user} />
+          <Assignment
+            assignment={assignment}
+            course={course}
+            user={user}
+            onAssignmentChanged={() => setCourseVersion((v) => v + 1)}
+            onAssignmentDeleted={() => {
+              setCourseVersion((v) => v + 1)
+              setAssignment(null)
+              setPage('course')
+            }}
+          />
         )}
       </main>
 
@@ -226,7 +239,7 @@ function Dashboard({ user, onEnterCourse }) {
   )
 }
 
-function Course({ course, user, onOpenAssignment }) {
+function Course({ course, user, refreshKey, onAssignmentsChange, onOpenAssignment }) {
   const [assignments, setAssignments] = useState([])
   const [error, setError] = useState('')
   const [form, setForm] = useState({ title: '新作业', description: '描述', dueAt: new Date(Date.now() + 86400000).toISOString().slice(0, 16) })
@@ -237,7 +250,7 @@ function Course({ course, user, onOpenAssignment }) {
 
   useEffect(() => {
     loadAssignments()
-  }, [course.id])
+  }, [course.id, refreshKey])
 
   return (
     <div className="page">
@@ -298,6 +311,7 @@ function Course({ course, user, onOpenAssignment }) {
             <button className="btn-primary" onClick={async () => {
               await api.createAssignment(course.id, { ...form, allowLate: true, maxPoints: 100 })
               await loadAssignments()
+              onAssignmentsChange?.()
             }}>创建作业</button>
           </div>
         </section>
@@ -336,20 +350,37 @@ function Course({ course, user, onOpenAssignment }) {
   )
 }
 
-function Assignment({ assignment, course, user }) {
+function Assignment({ assignment, course, user, onAssignmentChanged, onAssignmentDeleted }) {
   const [detail, setDetail] = useState(assignment)
   const [history, setHistory] = useState([])
   const [materials, setMaterials] = useState(assignment?.materials || [])
   const [msg, setMsg] = useState('')
+  const [editForm, setEditForm] = useState({
+    title: assignment.title,
+    description: assignment.description,
+    dueAt: toLocalInput(assignment.dueAt),
+    allowLate: assignment.allowLate,
+    maxPoints: assignment.maxPoints,
+  })
 
   const isStudent = user.role === 'STUDENT'
   const isStaff = ['TEACHER', 'TA', 'OWNER'].includes(course?.roleInCourse) || user.role === 'ADMIN'
 
-  useEffect(() => {
-    api.assignment(assignment.id).then((res) => {
-      setDetail(res)
-      setMaterials(res.materials || [])
+  const fetchDetail = async () => {
+    const res = await api.assignment(assignment.id)
+    setDetail(res)
+    setMaterials(res.materials || [])
+    setEditForm({
+      title: res.title,
+      description: res.description,
+      dueAt: toLocalInput(res.dueAt),
+      allowLate: res.allowLate,
+      maxPoints: res.maxPoints,
     })
+  }
+
+  useEffect(() => {
+    fetchDetail()
     if (isStudent) {
       api.mySubmissions(assignment.id).then(setHistory).catch(() => {})
     }
@@ -374,11 +405,43 @@ function Assignment({ assignment, course, user }) {
     if (!files.length) return
     try {
       const res = await api.uploadMaterials(assignment.id, files)
-      setMaterials(res.materials)
+      setMaterials(res.materials || [])
       ev.target.value = ''
+      onAssignmentChanged?.()
     } catch (err) {
       alert(err.message)
     }
+  }
+
+  const deleteMaterial = async (idx) => {
+    if (!window.confirm('确定删除该资料吗？')) return
+    try {
+      const res = await api.deleteMaterial(assignment.id, idx)
+      setMaterials(res.materials || [])
+      onAssignmentChanged?.()
+    } catch (err) {
+      alert(err.message)
+    }
+  }
+
+  const handleUpdateAssignment = async () => {
+    await api.updateAssignment(assignment.id, {
+      title: editForm.title,
+      description: editForm.description,
+      dueAt: editForm.dueAt ? new Date(editForm.dueAt).toISOString() : undefined,
+      allowLate: editForm.allowLate,
+      maxPoints: Number(editForm.maxPoints) || 0,
+    })
+    await fetchDetail()
+    onAssignmentChanged?.()
+    alert('作业已更新')
+  }
+
+  const handleDeleteAssignment = async () => {
+    if (!window.confirm('确定删除该作业？该操作不可恢复。')) return
+    await api.deleteAssignment(assignment.id)
+    onAssignmentDeleted?.()
+    alert('作业已删除')
   }
 
   return (
@@ -417,20 +480,58 @@ function Assignment({ assignment, course, user }) {
                   <strong>{m.filename}</strong>
                   <span className="muted">{m.size ? formatSize(m.size) : ''}</span>
                 </div>
-                <button className="btn-ghost" onClick={async () => {
-                  const { blob, filename } = await api.downloadMaterial(assignment.id, m.idx)
-                  const url = URL.createObjectURL(blob)
-                  const a = document.createElement('a')
-                  a.href = url
-                  a.download = filename
-                  a.click()
-                  URL.revokeObjectURL(url)
-                }}>下载</button>
+                <div className="material-actions">
+                  <button className="btn-ghost" onClick={async () => {
+                    const { blob, filename } = await api.downloadMaterial(assignment.id, m.idx)
+                    const url = URL.createObjectURL(blob)
+                    const a = document.createElement('a')
+                    a.href = url
+                    a.download = filename
+                    a.click()
+                    URL.revokeObjectURL(url)
+                  }}>下载</button>
+                  {isStaff && (
+                    <button className="btn-link danger" onClick={() => deleteMaterial(m.idx)}>删除</button>
+                  )}
+                </div>
               </li>
             ))}
           </ul>
         </section>
       </div>
+
+      {isStaff && (
+        <section className="card">
+          <div className="section-header">
+            <div>
+              <h3>编辑作业</h3>
+              <p className="muted">更新标题、描述、截止时间等</p>
+            </div>
+            <button className="btn-danger" onClick={handleDeleteAssignment}>删除作业</button>
+          </div>
+          <div className="form-grid">
+            <label>作业名称
+              <input value={editForm.title} onChange={(e) => setEditForm({ ...editForm, title: e.target.value })} />
+            </label>
+            <label>截止时间
+              <input type="datetime-local" value={editForm.dueAt} onChange={(e) => setEditForm({ ...editForm, dueAt: e.target.value })} />
+            </label>
+            <label>允许迟交
+              <select value={editForm.allowLate ? 'true' : 'false'} onChange={(e) => setEditForm({ ...editForm, allowLate: e.target.value === 'true' })}>
+                <option value="true">是</option>
+                <option value="false">否</option>
+              </select>
+            </label>
+            <label>满分
+              <input type="number" value={editForm.maxPoints} onChange={(e) => setEditForm({ ...editForm, maxPoints: e.target.value })} />
+            </label>
+            <label>作业说明
+              <textarea value={editForm.description} onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} />
+            </label>
+            <button className="btn-primary" type="button" onClick={handleUpdateAssignment}>保存修改</button>
+          </div>
+        </section>
+      )}
 
       {isStudent && (
         <section className="card">
@@ -787,4 +888,12 @@ function formatSize(size) {
   if (size > 1024 * 1024) return (size / (1024 * 1024)).toFixed(1) + ' MB'
   if (size > 1024) return (size / 1024).toFixed(1) + ' KB'
   return size + ' B'
+}
+
+function toLocalInput(dateStr) {
+  if (!dateStr) return ''
+  const date = new Date(dateStr)
+  const offset = date.getTimezoneOffset()
+  const local = new Date(date.getTime() - offset * 60000)
+  return local.toISOString().slice(0, 16)
 }

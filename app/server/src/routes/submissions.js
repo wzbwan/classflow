@@ -2,7 +2,12 @@ import { createReadStream, createWriteStream } from "fs";
 import { basename, join, resolve } from "path";
 
 function sanitizeFilename(name) {
-  return name.replace(/[^a-zA-Z0-9._-]/g, "_");
+  if (!name) return "file";
+  return name
+    .normalize("NFKC")
+    .replace(/[\\/:*?"<>|]/g, "-")
+    .replace(/\s+/g, "_")
+    .slice(0, 255) || "file";
 }
 
 export default async function submissionRoutes(fastify) {

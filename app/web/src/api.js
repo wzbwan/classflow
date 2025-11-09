@@ -29,12 +29,15 @@ export const api = {
   listAssignments: (courseId) => req(`/api/courses/${courseId}/assignments`),
   createAssignment: (courseId, data) => req(`/api/courses/${courseId}/assignments`, { method: 'POST', body: data }),
   assignment: (id) => req(`/api/assignments/${id}`),
+  updateAssignment: (id, data) => req(`/api/assignments/${id}`, { method: 'PUT', body: data }),
+  deleteAssignment: (id) => req(`/api/assignments/${id}`, { method: 'DELETE' }),
   listMaterials: (assignmentId) => req(`/api/assignments/${assignmentId}/materials`),
   uploadMaterials: (assignmentId, files) => {
     const fd = new FormData()
     files.forEach(f => fd.append('files', f))
     return req(`/api/assignments/${assignmentId}/materials`, { method: 'POST', body: fd })
   },
+  deleteMaterial: (assignmentId, idx) => req(`/api/assignments/${assignmentId}/materials/${idx}`, { method: 'DELETE' }),
   downloadMaterial: async (assignmentId, idx) => {
     const res = await fetch(`/api/assignments/${assignmentId}/materials/${idx}/download`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
     if (!res.ok) throw new Error('下载失败')
