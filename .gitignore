@@ -21,6 +21,8 @@ node_modules/
 /uploads
 dev.db
 /migrations
+/app/web/dist
+
 # misc
 .DS_Store
 *.pem
