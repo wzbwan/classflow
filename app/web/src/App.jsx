@@ -355,6 +355,9 @@ function Assignment({ assignment, course, user, onAssignmentChanged, onAssignmen
   const [history, setHistory] = useState([])
   const [materials, setMaterials] = useState(assignment?.materials || [])
   const [msg, setMsg] = useState('')
+  const [checkingPlagiarism, setCheckingPlagiarism] = useState(false)
+  const [plagiarismResult, setPlagiarismResult] = useState(null)
+  const [exporting, setExporting] = useState(false)
   const [editForm, setEditForm] = useState({
     title: assignment.title,
     description: assignment.description,
@@ -424,6 +427,11 @@ function Assignment({ assignment, course, user, onAssignmentChanged, onAssignmen
     }
   }
 
+  const handleMaterialDownload = async (idx, { watermark = false } = {}) => {
+    const { blob, filename } = await api.downloadMaterial(assignment.id, idx, { watermark })
+    downloadBlob(blob, filename)
+  }
+
   const handleUpdateAssignment = async () => {
     await api.updateAssignment(assignment.id, {
       title: editForm.title,
@@ -442,6 +450,30 @@ function Assignment({ assignment, course, user, onAssignmentChanged, onAssignmen
     await api.deleteAssignment(assignment.id)
     onAssignmentDeleted?.()
     alert('作业已删除')
+  }
+
+  const handleExportZip = async () => {
+    setExporting(true)
+    try {
+      const { blob, filename } = await api.exportAssignmentZip(assignment.id)
+      downloadBlob(blob, filename)
+    } catch (err) {
+      alert(err.message)
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const runPlagiarism = async () => {
+    setCheckingPlagiarism(true)
+    try {
+      const result = await api.plagiarismCheck(assignment.id)
+      setPlagiarismResult(result)
+    } catch (err) {
+      alert(err.message)
+    } finally {
+      setCheckingPlagiarism(false)
+    }
   }
 
   return (
@@ -481,15 +513,10 @@ function Assignment({ assignment, course, user, onAssignmentChanged, onAssignmen
                   <span className="muted">{m.size ? formatSize(m.size) : ''}</span>
                 </div>
                 <div className="material-actions">
-                  <button className="btn-ghost" onClick={async () => {
-                    const { blob, filename } = await api.downloadMaterial(assignment.id, m.idx)
-                    const url = URL.createObjectURL(blob)
-                    const a = document.createElement('a')
-                    a.href = url
-                    a.download = filename
-                    a.click()
-                    URL.revokeObjectURL(url)
-                  }}>下载</button>
+                  <button className="btn-ghost" onClick={() => handleMaterialDownload(m.idx)}>下载</button>
+                  {isStudent && /\.xlsx$/i.test(m.filename) && (
+                    <button className="btn-link" onClick={() => handleMaterialDownload(m.idx, { watermark: true })}>加水印下载</button>
+                  )}
                   {isStaff && (
                     <button className="btn-link danger" onClick={() => deleteMaterial(m.idx)}>删除</button>
                   )}
@@ -499,6 +526,43 @@ function Assignment({ assignment, course, user, onAssignmentChanged, onAssignmen
           </ul>
         </section>
       </div>
+
+      {isStaff && (
+        <section className="card">
+          <div className="section-header">
+            <div>
+              <h3>批量导出 & 查重</h3>
+              <p className="muted">一键导出全部作业，或运行重复提交检测</p>
+            </div>
+            <div className="action-row">
+              <button className="btn-secondary" onClick={handleExportZip} disabled={exporting}>{exporting ? '导出中...' : '打包导出'}</button>
+              <button className="btn-ghost" onClick={runPlagiarism} disabled={checkingPlagiarism}>{checkingPlagiarism ? '查重中...' : '查重'}</button>
+            </div>
+          </div>
+          {plagiarismResult && (
+            <div>
+              <p className="muted">检测到 {plagiarismResult.matches.length} 组疑似重复（共分析 {plagiarismResult.totalFiles} 份文件）</p>
+              {plagiarismResult.matches.length === 0 ? (
+                <div className="alert success">未发现重复文件</div>
+              ) : (
+                <div className="table-wrapper">
+                  <table className="table">
+                    <thead><tr><th>文件哈希</th><th>涉及学生</th></tr></thead>
+                    <tbody>
+                      {plagiarismResult.matches.map((group, idx) => (
+                        <tr key={idx}>
+                          <td className="tiny">{group[0].hash.slice(0, 12)}...</td>
+                          <td>{group.map((g) => `${g.student.studentId || g.student.id} ${g.student.name || ''}`).join(' vs ')}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+      )}
 
       {isStaff && (
         <section className="card">

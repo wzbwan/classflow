@@ -1,6 +1,7 @@
 import { createReadStream, createWriteStream } from "fs";
-import { unlink } from "fs/promises";
-import { basename, join, resolve } from "path";
+import { unlink, readFile } from "fs/promises";
+import { basename, join, resolve, extname } from "path";
+import * as XLSX from "xlsx";
 
 function sanitizeFilename(name) {
   if (!name) return "file";
@@ -9,6 +10,19 @@ function sanitizeFilename(name) {
     .replace(/[\\/:*?"<>|]/g, "-")
     .replace(/\s+/g, "_")
     .slice(0, 255) || "file";
+}
+
+function setDownloadHeaders(reply, filename) {
+  const fallback = basename(filename).replace(/[\r\n]/g, "_");
+  const encoded = encodeURIComponent(fallback);
+  reply.header("Content-Disposition", `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`);
+}
+
+async function watermarkExcel(buffer, marker) {
+  const wb = XLSX.read(buffer, { type: "buffer" });
+  wb.Custprops = wb.Custprops || {};
+  wb.Custprops["WatermarkId"] = marker;
+  return XLSX.write(wb, { bookType: "xlsx", type: "buffer" });
 }
 
 const safeJsonArray = (val) => {
@@ -129,7 +143,18 @@ export default async function assignmentRoutes(fastify) {
     const filePath = resolve(m.path);
     const root = resolve(fastify.uploadDir);
     if (!filePath.startsWith(root)) return reply.code(403).send({ error: "非法路径" });
-    reply.header("Content-Disposition", `attachment; filename="${basename(m.filename)}"`);
+    const wantsWatermark = ["1", "true"].includes(String(req.query?.watermark || "").toLowerCase());
+    const ext = extname(m.filename || "").toLowerCase();
+    if (wantsWatermark && ext === ".xlsx" && member?.roleInCourse === "STUDENT") {
+      const buffer = await readFile(filePath);
+      const user = await fastify.prisma.user.findUnique({ where: { id: req.user.uid } });
+      const marker = user?.studentId || user?.email || String(user.id);
+      const wmBuffer = await watermarkExcel(buffer, marker);
+      setDownloadHeaders(reply, m.filename);
+      reply.type("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      return reply.send(wmBuffer);
+    }
+    setDownloadHeaders(reply, m.filename);
     return reply.send(createReadStream(filePath));
   });
 

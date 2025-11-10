@@ -1,5 +1,7 @@
 import { createReadStream, createWriteStream } from "fs";
-import { basename, join, resolve } from "path";
+import { basename, join, resolve, extname } from "path";
+import archiver from "archiver";
+import { createHash } from "crypto";
 
 function sanitizeFilename(name) {
   if (!name) return "file";
@@ -8,6 +10,31 @@ function sanitizeFilename(name) {
     .replace(/[\\/:*?"<>|]/g, "-")
     .replace(/\s+/g, "_")
     .slice(0, 255) || "file";
+}
+
+function setDownloadHeaders(reply, filename) {
+  const fallback = basename(filename).replace(/[\r\n]/g, "_");
+  const encoded = encodeURIComponent(fallback);
+  reply.header("Content-Disposition", `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`);
+}
+
+function safeJsonArray(val) {
+  if (!val) return [];
+  if (Array.isArray(val)) return val;
+  if (typeof val === "string") {
+    try { return JSON.parse(val); } catch (_) { return []; }
+  }
+  return [];
+}
+
+function hashFile(path) {
+  return new Promise((resolve, reject) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(path);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("end", () => resolve(hash.digest("hex")));
+    stream.on("error", reject);
+  });
 }
 
 export default async function submissionRoutes(fastify) {
@@ -123,7 +150,7 @@ export default async function submissionRoutes(fastify) {
     const isOwner = sub.studentId === req.user.uid;
     const staff = await fastify.prisma.enrollment.findFirst({ where: { courseId: sub.assignment.courseId, userId: req.user.uid, roleInCourse: { in: ["TEACHER", "TA", "OWNER"] } } });
     if (!isOwner && !staff) return reply.code(403).send({ error: "无权限" });
-    const files = JSON.parse(sub.filesJson || '[]');
+    const files = safeJsonArray(sub.filesJson);
     return files.map((f, idx) => ({ idx, filename: f.filename }));
   });
 
@@ -136,13 +163,99 @@ export default async function submissionRoutes(fastify) {
     const isOwner = sub.studentId === req.user.uid;
     const staff = await fastify.prisma.enrollment.findFirst({ where: { courseId: sub.assignment.courseId, userId: req.user.uid, roleInCourse: { in: ["TEACHER", "TA", "OWNER"] } } });
     if (!isOwner && !staff) return reply.code(403).send({ error: "无权限" });
-    const files = JSON.parse(sub.filesJson || '[]');
+    const files = safeJsonArray(sub.filesJson);
     const f = files[idx];
     if (!f) return reply.code(404).send({ error: "文件不存在" });
     const filePath = resolve(f.path);
     const root = resolve(fastify.uploadDir);
     if (!filePath.startsWith(root)) return reply.code(403).send({ error: "非法路径" });
-    reply.header('Content-Disposition', `attachment; filename="${basename(f.filename)}"`);
+    setDownloadHeaders(reply, f.filename);
     return reply.send(createReadStream(filePath));
+  });
+
+  // 批量导出提交（ZIP）
+  fastify.get("/assignments/:id/submissions/export", { preHandler: [fastify.auth] }, async (req, reply) => {
+    const assignmentId = Number(req.params.id);
+    const assignment = await fastify.prisma.assignment.findUnique({ where: { id: assignmentId }, include: { course: true } });
+    if (!assignment) return reply.code(404).send({ error: "作业不存在" });
+    const staff = await fastify.prisma.enrollment.findFirst({ where: { courseId: assignment.courseId, userId: req.user.uid, roleInCourse: { in: ["TEACHER", "TA", "OWNER"] } } });
+    if (!staff && req.user.role !== "ADMIN") return reply.code(403).send({ error: "无权限" });
+
+    const archive = archiver("zip", { zlib: { level: 9 } });
+    const filename = sanitizeFilename(`${assignment.course.code || assignment.courseId}-${assignment.title}-submissions.zip`);
+    reply.type("application/zip");
+    setDownloadHeaders(reply, filename);
+    reply.send(archive);
+
+    const students = await fastify.prisma.enrollment.findMany({
+      where: { courseId: assignment.courseId, roleInCourse: "STUDENT" },
+      include: { user: true },
+    });
+
+    const usedNames = new Map();
+    for (const s of students) {
+      const sub = await fastify.prisma.submission.findFirst({
+        where: { assignmentId, studentId: s.userId },
+        orderBy: { version: "desc" },
+      });
+      if (!sub) continue;
+      const files = safeJsonArray(sub.filesJson);
+      if (!files.length) continue;
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const ext = extname(file.filename || "");
+        const baseRaw = `${s.user.studentId || "ID" + s.user.id}${s.user.name || ""}`;
+        const base = sanitizeFilename(baseRaw) || `student_${s.user.id}`;
+        let target = `${base}${ext}`;
+        if (usedNames.has(target)) {
+          const count = usedNames.get(target) + 1;
+          usedNames.set(target, count);
+          target = `${base}_${count}${ext}`;
+        } else {
+          usedNames.set(target, 1);
+        }
+        archive.file(file.path, { name: target });
+      }
+    }
+
+    await archive.finalize();
+  });
+
+  // 查重接口
+  fastify.post("/assignments/:id/plagiarism-check", { preHandler: [fastify.auth] }, async (req, reply) => {
+    const assignmentId = Number(req.params.id);
+    const assignment = await fastify.prisma.assignment.findUnique({ where: { id: assignmentId } });
+    if (!assignment) return reply.code(404).send({ error: "作业不存在" });
+    const staff = await fastify.prisma.enrollment.findFirst({ where: { courseId: assignment.courseId, userId: req.user.uid, roleInCourse: { in: ["TEACHER", "TA", "OWNER"] } } });
+    if (!staff && req.user.role !== "ADMIN") return reply.code(403).send({ error: "无权限" });
+
+    const students = await fastify.prisma.enrollment.findMany({
+      where: { courseId: assignment.courseId, roleInCourse: "STUDENT" },
+      include: { user: true },
+    });
+
+    const hashMap = new Map();
+    let totalFiles = 0;
+    for (const s of students) {
+      const sub = await fastify.prisma.submission.findFirst({
+        where: { assignmentId, studentId: s.userId },
+        orderBy: { version: "desc" },
+      });
+      if (!sub) continue;
+      const files = safeJsonArray(sub.filesJson);
+      for (const file of files) {
+        totalFiles += 1;
+        try {
+          const hash = await hashFile(file.path);
+          if (!hashMap.has(hash)) hashMap.set(hash, []);
+          hashMap.get(hash).push({ hash, submissionId: sub.id, student: { id: s.user.id, name: s.user.name, studentId: s.user.studentId } });
+        } catch (err) {
+          fastify.log.error(err);
+        }
+      }
+    }
+
+    const matches = Array.from(hashMap.values()).filter((list) => list.length > 1);
+    return { matches, totalFiles };
   });
 }

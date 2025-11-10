@@ -19,6 +19,15 @@ async function req(path, opts = {}) {
   return res.text()
 }
 
+function extractFilename(res) {
+  const cd = res.headers.get('Content-Disposition') || ''
+  let match = cd.match(/filename\*=UTF-8''([^;]+)/i)
+  if (match) return decodeURIComponent(match[1])
+  match = cd.match(/filename="?([^";]+)"?/i)
+  if (match) return match[1]
+  return 'download'
+}
+
 export const api = {
   login: (identifier, password) => req('/api/auth/login', { method: 'POST', body: { id: identifier, password } }),
   me: () => req('/api/auth/me'),
@@ -38,15 +47,14 @@ export const api = {
     return req(`/api/assignments/${assignmentId}/materials`, { method: 'POST', body: fd })
   },
   deleteMaterial: (assignmentId, idx) => req(`/api/assignments/${assignmentId}/materials/${idx}`, { method: 'DELETE' }),
-  downloadMaterial: async (assignmentId, idx) => {
-    const res = await fetch(`/api/assignments/${assignmentId}/materials/${idx}/download`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+  downloadMaterial: async (assignmentId, idx, options = {}) => {
+    const params = new URLSearchParams()
+    if (options.watermark) params.set('watermark', '1')
+    const query = params.toString() ? `?${params.toString()}` : ''
+    const res = await fetch(`/api/assignments/${assignmentId}/materials/${idx}/download${query}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
     if (!res.ok) throw new Error('下载失败')
     const blob = await res.blob()
-    const cd = res.headers.get('Content-Disposition') || ''
-    let filename = 'material'
-    const m = cd.match(/filename="?([^";]+)"?/)
-    if (m) filename = decodeURIComponent(m[1])
-    return { blob, filename }
+    return { blob, filename: extractFilename(res) }
   },
   submit: (assignmentId, formData) => req(`/api/assignments/${assignmentId}/submissions`, { method: 'POST', body: formData }),
   grade: (submissionId, data) => req(`/api/submissions/${submissionId}/grade`, { method: 'POST', body: data }),
@@ -62,12 +70,15 @@ export const api = {
     const res = await fetch(`/api/submissions/${submissionId}/files/${idx}/download`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
     if (!res.ok) throw new Error('下载失败')
     const blob = await res.blob()
-    const cd = res.headers.get('Content-Disposition') || ''
-    let filename = 'download'
-    const m = cd.match(/filename="?([^";]+)"?/)
-    if (m) filename = decodeURIComponent(m[1])
-    return { blob, filename }
+    return { blob, filename: extractFilename(res) }
   },
+  exportAssignmentZip: async (assignmentId) => {
+    const res = await fetch(`/api/assignments/${assignmentId}/submissions/export`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+    if (!res.ok) throw new Error('导出失败')
+    const blob = await res.blob()
+    return { blob, filename: extractFilename(res) }
+  },
+  plagiarismCheck: (assignmentId) => req(`/api/assignments/${assignmentId}/plagiarism-check`, { method: 'POST' }),
   // Admin
   adminListUsers: (params={}) => {
     const qs = new URLSearchParams(params).toString()

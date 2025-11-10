@@ -64,6 +64,12 @@ pnpm dev
 - 提交：`POST /api/assignments/:id/submissions`（multipart）
 - 评分：`POST /api/submissions/:id/grade`
 - 成绩簿：`GET /api/courses/:id/gradebook?format=csv`
+- 批量导出与查重：
+  - 作业更新/删除：`PUT /api/assignments/:id`、`DELETE /api/assignments/:id`
+  - 资料删除：`DELETE /api/assignments/:id/materials/:idx`
+  - 提交批量导出（ZIP）：`GET /api/assignments/:id/submissions/export`
+  - 自动查重：`POST /api/assignments/:id/plagiarism-check`
+  - Excel 水印：`GET /api/assignments/:id/materials/:idx/download?watermark=1`（学生下载时注入隐形学号标识）
 
 ### 管理员功能
 
