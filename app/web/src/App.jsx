@@ -365,6 +365,7 @@ function Assignment({ assignment, course, user, onAssignmentChanged, onAssignmen
     allowLate: assignment.allowLate,
     maxPoints: assignment.maxPoints,
   })
+  const [submitState, setSubmitState] = useState({ hasFile: false, externalLink: '' })
 
   const isStudent = user.role === 'STUDENT'
   const isStaff = ['TEACHER', 'TA', 'OWNER'].includes(course?.roleInCourse) || user.role === 'ADMIN'
@@ -398,6 +399,7 @@ function Assignment({ assignment, course, user, onAssignmentChanged, onAssignmen
       const list = await api.mySubmissions(assignment.id)
       setHistory(list)
       ev.target.reset()
+      setSubmitState({ hasFile: false, externalLink: '' })
     } catch (err) {
       setMsg(err.message)
     }
@@ -606,9 +608,34 @@ function Assignment({ assignment, course, user, onAssignmentChanged, onAssignmen
             </div>
           </div>
           <form className="form-grid" onSubmit={handleSubmit}>
-            <label>上传文件<input type="file" name="files" multiple /></label>
-            <label>外链<input name="external_link" placeholder="https://..." /></label>
-            <button className="btn-primary" type="submit">提交</button>
+            <label>上传文件
+              <input
+                type="file"
+                name="files"
+                multiple
+                onChange={(e) => {
+                  const hasFile = e.target.files && e.target.files.length > 0
+                  setSubmitState((prev) => ({ ...prev, hasFile }))
+                }}
+              />
+            </label>
+            <label>外链
+              <input
+                name="external_link"
+                placeholder="https://..."
+                onChange={(e) => {
+                  const value = e.target.value
+                  setSubmitState((prev) => ({ ...prev, externalLink: value }))
+                }}
+              />
+            </label>
+            <button
+              className="btn-primary"
+              type="submit"
+              disabled={!submitState.hasFile && !submitState.externalLink.trim()}
+            >
+              提交
+            </button>
           </form>
           {msg && <div className="alert success">{msg}</div>}
           <h4>提交历史</h4>
