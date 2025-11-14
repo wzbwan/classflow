@@ -12,10 +12,27 @@ function sanitizeFilename(name) {
     .slice(0, 255) || "file";
 }
 
+function toAsciiFallback(name) {
+  if (!name) return "file";
+  // 1. Normalize and strip directory parts / CRLF
+  const base = basename(String(name))
+    .normalize("NFKC")
+    .replace(/[\r\n]/g, "_")
+    .replace(/[\\/:*?"<>|]/g, "-")
+    .replace(/\s+/g, "_")
+    .slice(0, 255) || "file";
+  // 2. Ensure ASCII only for HTTP header
+  return base.replace(/[^\x20-\x7E]/g, "_");
+}
+
 function setDownloadHeaders(reply, filename) {
-  const fallback = basename(filename).replace(/[\r\n]/g, "_");
-  const encoded = encodeURIComponent(fallback);
-  reply.header("Content-Disposition", `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`);
+  const original = filename || "file";
+  const fallback = toAsciiFallback(original);
+  const encoded = encodeURIComponent(original.normalize("NFKC"));
+  reply.header(
+    "Content-Disposition",
+    `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`
+  );
 }
 
 function safeJsonArray(val) {

@@ -13,8 +13,9 @@ function sanitizeFilename(name) {
 }
 
 function setDownloadHeaders(reply, filename) {
-  const fallback = basename(filename).replace(/[\r\n]/g, "_");
-  const encoded = encodeURIComponent(fallback);
+  // const fallback = basename(filename).replace(/[\r\n]/g, "_");
+  const fallback = sanitizeFilename(filename);
+  const encoded = encodeURIComponent(filename);
   reply.header("Content-Disposition", `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`);
 }
 
